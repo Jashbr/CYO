@@ -1,0 +1,409 @@
+---
+title: "HarvardX Capstone Project - CYO - Credit Card Approval"
+author: "Jamuna Bhaskar"
+date: "January 09 2020"
+output: html_document
+---
+
+
+## 1 Introduction
+
+  The project for which we would develop machine learning algorithm is Credit Card application assessment. There are multiple checkpoints involved in deciding on a credit card approval, out of which income of the customer, any previous default credit obligations and employment status play a significant role.
+
+  The purpose of this documentation is to demonstrate the machine learning techniques and the ability to clearly communicate the process and insights gained from this analysis. 
+Here we have used Credit Approval Dataset from UCI Machine Learning Repository. This dataset is a combination of applicant’s details and approval decisions. 
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+if(!require(tidyverse)) install.packages("tidyverse", repos = "http://cran.us.r-project.org")
+if(!require(caret)) install.packages("caret", repos = "http://cran.us.r-project.org")
+if(!require(data.table)) install.packages("data.table", repos = "http://cran.us.r-project.org")
+if(!require(data.table)) install.packages("caTools")
+library(caTools)
+library(data.table)
+library(purrr)
+library(formattable)
+```
+
+
+### 1.1 Credit Approval Dataset
+  As mentioned in the dataset description file, this dataset contains both instances of people who got their credit card approved as well as denied. All attribute names and values have been encrypted to protect confidentiality of data. And 5% of the available data has one or more missing values.
+  
+Let’s take a quick look at the dataset. 
+
+
+```{r, echo=FALSE}
+crdappsrc <- read.table("crx.data", sep = ",")
+
+credit_app <- crdappsrc
+
+as.datatable(formattable(head(credit_app)))
+
+```
+
+Attribute Information:
+
+*    A1:	b, a.
+
+*    A2:	continuous.
+
+*    A3:	continuous.
+
+*    A4:	u, y, l, t.
+
+*    A5:	g, p, gg.
+
+*    A6:	c, d, cc, i, j, k, m, r, q, w, x, e, aa, ff.
+
+*    A7:	v, h, bb, j, n, z, dd, ff, o.
+
+*    A8:	continuous.
+
+*    A9:	t, f.
+
+*    A10:	t, f.
+
+*    A11:	continuous.
+
+*    A12:	t, f.
+
+*    A13:	g, p, s.
+
+*    A14:	continuous.
+
+*    A15:	continuous.
+
+*    A16: +,-         (class attribute)
+
+With reference to the above attribute information provided in the documentation, lets give meaningful names to the columns.
+
+
+```{r Rename,echo=FALSE}
+credit_app <- credit_app %>%
+  dplyr::rename(
+    "gender" = V1,
+    "age" = V2,
+    "debt" = V3,
+    "married" = V4,
+    "customer" = V5,
+    "education" = V6,
+    "ethnicity" = V7,
+    "yearsemployed" = V8,
+    "priordefault" = V9,
+    "employmentstatus" = V10,
+    "creditscore" = V11,
+    "driverlicence" = V12,
+    "citizenship" = V13,
+    "zipcode" = V14,
+    "income" = V15,
+    "approvalstatus" = V16
+  )
+as.datatable(formattable(head(credit_app)))
+```
+
+The data set has 690 observations of 16 variables.
+
+```{r Structure,echo=FALSE}
+str(credit_app)
+```
+
+## 2 Data Transformation
+### 2.1 Binary Conversion of Data
+
+  As a first step, lets choose the variables with 2 status values and convert them to binary values, assuming they might have an influence on approval status. This would help us in further analysis when working with classification models.
+
+```{r Data preprocessing,echo=FALSE}
+credit_app$gender	 <- factor(ifelse(credit_app$gender=="a",1,0))
+credit_app$employmentstatus	 <- factor(ifelse(credit_app$employmentstatus=="t",1,0))
+credit_app$priordefault<- factor(ifelse(credit_app$priordefault=="t",1,0))
+credit_app$approvalstatus	 <- factor(ifelse(credit_app$approvalstatus=="+",1,0))
+
+```
+
+### 2.2 Missing Data
+  With reference to dataset description file, we are aware that there are 5% missing values. By taking a look at the summary, we recognize that missing values are labelled as ‘?’
+
+```{r Missing Data,echo=FALSE}
+summary(credit_app)
+```
+
+The attributes are
+
+* Age - 12 records with missing age value
+
+* Married - 6 records with missing value
+
+* Customer - 6 records with missing value
+
+* Ethnicity - 9 records with missing value
+
+Based on the dependency, either the occurrences can be deleted or plugged in with estimated values. 
+  
+  In the above list, Age is the continuous variable. Lets start to fill in the missing values for age variable. The simplest method is to find out the mean and substitute the NAs. However an accurate method would be to find the most closely correlated variables with age and predict the values using **linear regression**.
+
+```{r Use correlation to predict missing values,echo=FALSE}
+credit_app$age <- as.numeric(as.character(credit_app$age)) # replaces ? with NA
+num_data	<-  select_if(credit_app, is.numeric)
+```
+```{r,echo=FALSE}
+round(cor(num_data,use="complete.obs"),3)
+```
+
+From the above correlation table, we observe that the closely correlated variable with age is yearsemployed (0.396). So we’ll use age and yearsemployed to create linear regression model which in turn would be used to predict missing age values.
+
+
+```{r lm,echo=FALSE}
+Agelm<-lm(age~yearsemployed, data=credit_app,na.action=na.exclude)
+Agelm
+```
+
+Records with missing age values are shown below.
+```{r Records missing,echo=FALSE}
+missing<-which(is.na(credit_app$age))
+formattable(credit_app[missing,])
+```
+Then using Linear regression we have predicted age value and below table lists the same rows with predicted value.
+
+```{r Predicted Age,echo=FALSE}
+credit_app$age[missing]<- predict(Agelm,newdata=credit_app[missing,])
+formattable(credit_app[missing,])
+```
+
+Linear Regression -> Y=a+bX
+*b -> slope
+
+*a -> intercept
+
+*X -> respective yearsemployed value from table
+
+Age[609] = 28.448 + (1.412 * 4.250) = 34.45040
+
+### 2.3 Normalization
+  Next we observe that the continuous variables are of different scale. To overcome this we use Normalization, means transforming the values to the range between 0 and 1. This brings the dataset to a common scale (between 0 and 1) while keeping the distributions of variables the same. Here we use **z-score normalization**. 
+  
+$$\frac{value - \mu}{\sigma}$$
+
+$\mu$ - mean value
+
+$\sigma$ - standard deviation
+
+
+```{r sigma}
+sigma = sd(num_data$age, na.rm=TRUE)
+sigma
+```
+
+#### Normalize **age**
+
+```{r Histogram,echo=FALSE}
+credit_app$AgeNorm<- (credit_app$age-mean(credit_app$age, na.rm=TRUE))/sigma
+par(mfrow=c(1,2), oma=c(0,0,1,0))
+hist(credit_app$age,main=NULL,xlab="Age",col="grey")
+hist(credit_app$AgeNorm,main=NULL,xlab="AgeNorm",ylab=NULL,col="cadetblue")
+title("Distribution of Age Before and After Normalization",outer=TRUE)
+
+```
+
+We’ll use a boxplot showing the mean value for each group and the quartiles. This can be interpreted as the credit applicants with lower age are less likely to be approved, however there are several outlying applicants with high values that still were not provided approval.
+
+```{r boxplot age,echo=FALSE}
+ggplot(credit_app) + 
+  aes(approvalstatus,age) + 
+  geom_boxplot(outlier.colour="red") +
+  theme_bw() +
+  coord_flip() +
+  labs(title="Distribution of Age by Credit Approval Status")
+```
+```{r boxplot agenorm,echo=FALSE}
+ggplot(credit_app) + 
+  aes(approvalstatus,AgeNorm) + 
+  geom_boxplot(outlier.colour="red") +
+  theme_bw() +
+  coord_flip() +
+  labs(title="Distribution of AgeNorm by Credit Approval Status")
+```
+
+#### Normalize **yearsemployed**
+
+```{r View the distribution yearsemployed,echo=FALSE}
+credit_app$YearsEmployedNorm <- scale(credit_app$yearsemployed,center=TRUE,scale=TRUE)
+par(mfrow=c(1,2), oma=c(0,0,1,0))
+hist(credit_app$yearsemployed,main=NULL,xlab="YearsEmployed",col="grey")
+hist(credit_app$YearsEmployedNorm,main=NULL,xlab="YearsEmployedNorm",ylab=NULL,col="cadetblue")
+title("Distribution of YearsEmployed Before and After Normalization", outer=TRUE)
+
+```
+
+### 2.4 Log Transformation
+  By looking at these two histograms, we can notice the data is skewed towards right meaning unbalanced distribution. The logarithmic transformation can be used to make highly skewed distributions less skewed.
+
+```{r Log Transformation,echo=FALSE}
+Temp<- data.frame(scale(log(credit_app[,c(3,8,11,15)]+1),center=TRUE))
+names(Temp)<-c("DebtLog","YearsEmployedLog","CreditScoreLog","IncomeLog")
+credit_app<-cbind(credit_app,Temp)
+par(mfrow=c(1,2), oma=c(0,0,1,0))
+hist(credit_app$YearsEmployedNorm,main=NULL,xlab="YearsEmployedNorm",col="grey")
+hist(credit_app$YearsEmployedLog,main=NULL,xlab="YearsEmployedLog",ylab=NULL,col="cadetblue")
+title("Distribution of Values Before and After Log Transformation",outer=TRUE)
+```
+
+## 3 Generate Train & Test
+  The machine learning approach is to train an algorithm using a dataset for which we do know the actual outcome, and then apply this algorithm in the future to make a prediction when we don’t know the actual outcome.
+
+  Let’s split the dataset into Train and Test sets. Train set would be used to create and train the model and test set would be used to validate the model. We will allocate 75% of the items to Training and 25% items to the Test set.
+
+```{r}
+set.seed(1)
+split<- sample.split(credit_app$approvalstatus, SplitRatio=0.75)
+Train<- subset(credit_app,split==TRUE)
+Test <- subset(credit_app, split==FALSE)
+```
+
+## 4 Modeling Approach
+### 4.1 Logistic Regression
+
+  The machine learning task is to build an algorithm that returns a prediction for any of the possible values of the features. As mentioned in book, Introduction to Data Science by author Irizarry, data comes in the form of:
+ 
+* the **outcome** we want to predict and
+
+* the **features** that we will use to predict the outcome
+
+  In our project, the **outcome** we want to predict is approvalstatus which is binary (1 or 0), meaning the application can be either approved or denied. When the outcome is categorical, we refer to the machine learning task as **classification**, and the main output of the model will be a decision rule which prescribes which of the K classes we should predict. One of the classification techniques we’re about to use is **Logistic Regression**, as it is intended for binary (two-class) classification problems. It will predict the probability of an instance belonging to the default class, which can be snapped into a 0 or 1 classification.
+
+#### 4.1.1 Model 1
+```{r Model 1}
+LogFit<- glm(approvalstatus~AgeNorm+DebtLog+YearsEmployedLog+CreditScoreLog+IncomeLog, 
+		data=Train,family=binomial)
+summary(LogFit)
+
+```
+
+```{r}
+LogPred<- predict(LogFit,newdata=Train, type="response")
+table(predicted = LogPred>0.5,actual = Train$approvalstatus) 
+```
+
+#### 4.1.1.1 Observation
+  From the distribution of actual and predicted values, 146 are true positive and 244 are true negatives. This means, out of 517 observations, 244 are correctly predicted as denied and 146 are correctly predicted as approved, so here the accuracy of prediction is **75%**.
+  
+#### 4.1.2 Model 2
+  Let’s take a look at the p-values from MODEL-1 for each coefficients. A p-value less than 0.05 (typically ≤ 0.05) is statistically significant. In the above summary, AgeNorm and DebtLog are not significant (p-value > 0.05).
+  Now lets refine the model by excluding the non-significant ones, AgeNorm and DebtLog. 
+```{r Model 2,echo=FALSE}
+LogFit2<- glm(approvalstatus~YearsEmployedLog+CreditScoreLog+IncomeLog, 
+		data=Train,family=binomial)
+summary(LogFit2)
+
+```
+```{r,echo=FALSE}
+LogPred2<- predict(LogFit2,newdata=Train, type="response")
+table(predicted = LogPred2>0.5,actual = Train$approvalstatus)
+
+```
+  
+#### 4.1.2.1 Observation
+  Out of 517 observations, 242 are correctly predicted as denied and 146 are correctly predicted as approved and there is no improvement in the accuracy. The accuracy is still **75%** as in MODEL-1.
+  
+#### 4.1.3 Inference
+  As the accuracy remains the same in both models, we will use MODEL-2 (the model excluding non-significant variables) for validation.
+  
+#### 4.1.4 Apply the prediction on Test
+Let’s apply the model on test data. 
+```{r Validation,echo=FALSE}
+LogPred3<-predict(LogFit2, newdata=Test,type="response")
+table(predicted = LogPred3>0.5,actual = Test$approvalstatus)
+```
+
+
+#### 4.1.4.1 Observation
+145 (88+57) out of 173 observations are correct predictions which is **84%** accuracy.
+
+### 4.2 K – Nearest Neighbour
+  KNN algorithm is one of the most used supervised learning algorithm. It’s a non-parametric algorithm as it does not make any assumptions on the underlying data distribution. And this works based on feature similarity. Basically it collects the features of applicants comparing with similar features in the dataset. So this is useful to predict the approval status of a new applicant, without going through all the steps. 
+  
+Let’s start by choosing a K value. Usually an odd number is chosen if the number of classes is 2. The optimal value can be found by incrementing it.
+
+##### K=1
+```{r K=1,echo=FALSE}
+knn_fit <- knn3(approvalstatus~YearsEmployedLog+CreditScoreLog+IncomeLog, 
+		data=Train)
+y_hat_knn <- predict(knn_fit, Train, type = "class")
+#summary(y_hat_knn)
+confusionMatrix(y_hat_knn, Train$approvalstatus)#$overall["Accuracy"]
+```
+
+##### K=3
+```{r K=3,echo=FALSE}
+knn_fit3 <- knn3(approvalstatus~YearsEmployedLog+CreditScoreLog+IncomeLog, 
+		data=Train,k=3)
+y_hat_knn3 <- predict(knn_fit3, Train, type = "class")
+#summary(y_hat_knn3)
+confusionMatrix(y_hat_knn3, Train$approvalstatus)
+```
+
+##### K=5
+```{r K=5,echo=FALSE}
+knn_fit5 <- knn3(approvalstatus~YearsEmployedLog+CreditScoreLog+IncomeLog, 
+		data=Train,k=5)
+y_hat_knn5 <- predict(knn_fit5, Train, type = "class")
+#summary(y_hat_knn5)
+confusionMatrix(y_hat_knn5, Train$approvalstatus)
+```
+
+##### The Optimal K
+  From observing the above results, confusion matrix for K=3 is better than K=1. The overall accuracy for K=3 is **82%** whereas for K=1 is **79%**. When we check for K=5, overall accuracy is **80%**. K being the tuning parameter, we need to have a mechanism to find the optimal K. We want to pick the K that maximizes the accuracy and minimizes the error.
+
+```{r The Optimal K,echo=FALSE}
+ks <- seq(3, 100, 2)
+accuracy <- map_df(ks, function(k){
+  fit <- knn3(approvalstatus~YearsEmployedLog+CreditScoreLog+IncomeLog, 
+		data=Train, k = k)
+  
+  y_hat <- predict(fit, Train, type = "class")
+  cm_train <- confusionMatrix(y_hat, Train$approvalstatus)
+  train_error <- cm_train$overall["Accuracy"]
+  
+  tibble(train = train_error, test = 0)
+})
+#ks[which.max(accuracy$train)]
+#max(accuracy$train)
+```
+```{r}
+ks[which.max(accuracy$train)]
+```
+```{r}
+max(accuracy$train)
+```
+
+Now we know the optimal K is 3, lets apply that on test set.
+```{r KValidation,echo=FALSE}
+y_hat_knn_test <- predict(knn_fit3, Test, type = "class")
+confusionMatrix(y_hat_knn_test, Test$approvalstatus)$overall["Accuracy"]
+```
+
+### 4.3 Chi-Squared test
+  The Chi Squared is a test for independence between two variables. We’ll use this test to check if approval status is independent of ethnicity. The null hypothesis is that there’s no relationship between ethnicity and approval. 
+```{r Chi-Squared test,echo=FALSE}
+credit_app$ethnicity	<-ifelse(is.na(credit_app$ethnicity),"v",credit_app$ethnicity)
+tbl<-credit_app %>%
+group_by(ethnicity) %>%
+dplyr::summarise(Freq=n(),
+approvalstatus=sum(approvalstatus==1))
+tbl
+chisq.test(tbl[2:3])
+```
+
+#### 4.3.1 Observation
+  The resulting p-value is less than 0.05 so we cannot reject the null hypothesis. 
+
+#### 4.3.2 Inference
+  More investigation is needed to make sure if the results are due to chance and are not significant in terms of supporting the idea being investigated.  
+  
+## 5 Conclusion
+  We are able to conclude that the most significant attributes in determining the outcome of a credit application are Income, Years of Employment and Credit Score. In this project, models are built with focus on applying the classification techniques such as Logistic Regression and KNN. Accuracy predicted by both the methods are very similar. 
+  
+  Future work could include combination of techniques to produce improved accuracy to avoid the risk of approving a credit card to someone that should have been denied.
+  
+  
+  
